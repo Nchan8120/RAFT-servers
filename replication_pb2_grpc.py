@@ -14,15 +14,15 @@ class SequenceStub(object):
         Args:
             channel: A grpc.Channel.
         """
+        self.AppendEntries = channel.unary_unary(
+                '/replication.Sequence/AppendEntries',
+                request_serializer=replication__pb2.AppendEntriesRequest.SerializeToString,
+                response_deserializer=replication__pb2.AppendEntriesResponse.FromString,
+                )
         self.Write = channel.unary_unary(
                 '/replication.Sequence/Write',
                 request_serializer=replication__pb2.WriteRequest.SerializeToString,
                 response_deserializer=replication__pb2.WriteResponse.FromString,
-                )
-        self.Heartbeat = channel.unary_unary(
-                '/replication.Sequence/Heartbeat',
-                request_serializer=replication__pb2.HeartbeatRequest.SerializeToString,
-                response_deserializer=replication__pb2.HeartbeatResponse.FromString,
                 )
         self.RequestVote = channel.unary_unary(
                 '/replication.Sequence/RequestVote',
@@ -34,13 +34,13 @@ class SequenceStub(object):
 class SequenceServicer(object):
     """Missing associated documentation comment in .proto file."""
 
-    def Write(self, request, context):
+    def AppendEntries(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
-    def Heartbeat(self, request, context):
+    def Write(self, request, context):
         """Missing associated documentation comment in .proto file."""
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -55,15 +55,15 @@ class SequenceServicer(object):
 
 def add_SequenceServicer_to_server(servicer, server):
     rpc_method_handlers = {
+            'AppendEntries': grpc.unary_unary_rpc_method_handler(
+                    servicer.AppendEntries,
+                    request_deserializer=replication__pb2.AppendEntriesRequest.FromString,
+                    response_serializer=replication__pb2.AppendEntriesResponse.SerializeToString,
+            ),
             'Write': grpc.unary_unary_rpc_method_handler(
                     servicer.Write,
                     request_deserializer=replication__pb2.WriteRequest.FromString,
                     response_serializer=replication__pb2.WriteResponse.SerializeToString,
-            ),
-            'Heartbeat': grpc.unary_unary_rpc_method_handler(
-                    servicer.Heartbeat,
-                    request_deserializer=replication__pb2.HeartbeatRequest.FromString,
-                    response_serializer=replication__pb2.HeartbeatResponse.SerializeToString,
             ),
             'RequestVote': grpc.unary_unary_rpc_method_handler(
                     servicer.RequestVote,
@@ -81,6 +81,23 @@ class Sequence(object):
     """Missing associated documentation comment in .proto file."""
 
     @staticmethod
+    def AppendEntries(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/replication.Sequence/AppendEntries',
+            replication__pb2.AppendEntriesRequest.SerializeToString,
+            replication__pb2.AppendEntriesResponse.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
     def Write(request,
             target,
             options=(),
@@ -94,23 +111,6 @@ class Sequence(object):
         return grpc.experimental.unary_unary(request, target, '/replication.Sequence/Write',
             replication__pb2.WriteRequest.SerializeToString,
             replication__pb2.WriteResponse.FromString,
-            options, channel_credentials,
-            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
-
-    @staticmethod
-    def Heartbeat(request,
-            target,
-            options=(),
-            channel_credentials=None,
-            call_credentials=None,
-            insecure=False,
-            compression=None,
-            wait_for_ready=None,
-            timeout=None,
-            metadata=None):
-        return grpc.experimental.unary_unary(request, target, '/replication.Sequence/Heartbeat',
-            replication__pb2.HeartbeatRequest.SerializeToString,
-            replication__pb2.HeartbeatResponse.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
 
