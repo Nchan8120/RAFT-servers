@@ -82,6 +82,7 @@ class Backup(replication_pb2_grpc.SequenceServicer):
 
             # Step 2: Vote for self
             self.voted_for = self.port
+            votes_received = 1
 
             # Step 3: Request votes from other backups
             for backup_stub in self.backup_stubs:
@@ -97,12 +98,17 @@ class Backup(replication_pb2_grpc.SequenceServicer):
                         last_log_index=self.last_log_index,
                         last_log_term=(self.log[(self.last_log_index)]['term'])
                     ))
-                    # TODO Process the response 
+                    if response.vote_granted:
+                        votes_received += 1
                 except grpc.RpcError as e:
                     # Handle RPC errors
                     print(f"Error requesting vote from backup: {e}")
 
-            # Step 4: Reset election timer
+            # Step 4: Check if received votes are enough to become the leader
+            if votes_received > len(self.backup_stubs) / 2:  # Check if received votes are majority
+                print("Received majority of votes. Becoming the leader.")
+                # TODO code to become leader
+            
             self.reset_election_timer()
 
             print("ELECTION DONE")
