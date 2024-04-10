@@ -23,9 +23,10 @@ class Backup(replication_pb2_grpc.SequenceServicer):
         self.port = port
         self.backup_stubs = backup_stubs
         self.log = []
-        self.last_log_index = 0
+        self.last_log_index = -1
         self.last_log_term = 0
         self.outfile = outfile = 'backup_'+port+'.txt'
+        self.election_in_progress = False
 
 
     def Write(self, request, context):
@@ -35,7 +36,7 @@ class Backup(replication_pb2_grpc.SequenceServicer):
         log_entry = {'term': self.current_term, 'key': request.key, 'value': request.value}
         self.log.append(log_entry)
 
-        last_log_index = len(self.log) -1
+        self.last_log_index += 1
 
         # Log the write operation
         with open(self.outfile, 'a') as f:
@@ -74,37 +75,42 @@ class Backup(replication_pb2_grpc.SequenceServicer):
 
 
     def start_election(self):
-        # Step 1: Increment current term
-        self.current_term += 1
+        if not self.election_in_progress:
+            self.election_in_progress = True
+            # Step 1: Increment current term
+            self.current_term += 1
 
-        # Step 2: Vote for self
-        self.voted_for = self.port
+            # Step 2: Vote for self
+            self.voted_for = self.port
 
-        # Step 3: Request votes from other backups
-        for backup_stub in self.backup_stubs:
-            try:
-                print("current_term:", self.current_term)
-                print("port:", self.port)
-                print("last_log_index:", self.last_log_index)
-                print("last_log_term:", self.log[self.last_log_index]['term'])
-        
-                response = backup_stub.RequestVote(replication_pb2.RequestVoteRequest(
-                    term=self.current_term,
-                    candidate_id=int(self.port),  
-                    last_log_index=self.last_log_index,
-                    last_log_term=(self.log[(self.last_log_index)]['term'])
-                ))
-                # TODO Process the response 
-            except grpc.RpcError as e:
-                # Handle RPC errors
-                print(f"Error requesting vote from backup: {e}")
+            # Step 3: Request votes from other backups
+            for backup_stub in self.backup_stubs:
+                try:
+                    print("current_term:", self.current_term)
+                    print("port:", self.port)
+                    print("last_log_index:", self.last_log_index)
+                    print("last_log_term:", self.log[self.last_log_index]['term'])
+            
+                    response = backup_stub.RequestVote(replication_pb2.RequestVoteRequest(
+                        term=self.current_term,
+                        candidate_id=int(self.port),  
+                        last_log_index=self.last_log_index,
+                        last_log_term=(self.log[(self.last_log_index)]['term'])
+                    ))
+                    # TODO Process the response 
+                except grpc.RpcError as e:
+                    # Handle RPC errors
+                    print(f"Error requesting vote from backup: {e}")
 
-        # Step 4: Reset election timer
-        self.reset_election_timer()
+            # Step 4: Reset election timer
+            self.reset_election_timer()
+
+            print("ELECTION DONE")
 
     def check_heartbeats(self):
         current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         if self.primary_last_heartbeat and time.time() - time.mktime(time.strptime(self.primary_last_heartbeat, '%Y-%m-%d %H:%M:%S')) > 10:
+            
             self.start_election()
 
     
