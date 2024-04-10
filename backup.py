@@ -105,7 +105,9 @@ class Backup(replication_pb2_grpc.SequenceServicer):
                         votes_received += 1
                 except grpc.RpcError as e:
                     # Handle RPC errors
-                    print(f"Error requesting vote from backup: {e}")
+                    print(f"Error requesting vote from backup. Removing it from broadcast list.")
+                    # Delete the backup if its not responding
+                    self.backup_stubs.remove(backup_stub)
 
             # Step 4: Check if received votes are enough to become the leader
             if votes_received > len(self.backup_stubs) / 2:  # Check if received votes are majority
@@ -114,7 +116,7 @@ class Backup(replication_pb2_grpc.SequenceServicer):
                 
             
             self.reset_election_timer()
-
+            self.election_in_progress = False
             print("ELECTION DONE")
 
     def check_heartbeats(self):
