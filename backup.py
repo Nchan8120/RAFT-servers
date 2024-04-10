@@ -4,6 +4,7 @@
 # backup server
 import grpc
 from concurrent import futures
+from primary import Primary
 import replication_pb2
 import replication_pb2_grpc
 import heartbeat_service_pb2
@@ -27,6 +28,7 @@ class Backup(replication_pb2_grpc.SequenceServicer):
         self.last_log_term = 0
         self.outfile = outfile = 'backup_'+port+'.txt'
         self.election_in_progress = False
+        self.isPrimary = False
 
 
     def Write(self, request, context):
@@ -107,7 +109,8 @@ class Backup(replication_pb2_grpc.SequenceServicer):
             # Step 4: Check if received votes are enough to become the leader
             if votes_received > len(self.backup_stubs) / 2:  # Check if received votes are majority
                 print("Received majority of votes. Becoming the leader.")
-                # TODO code to become leader
+                self.isPrimary = True
+                
             
             self.reset_election_timer()
 
@@ -116,11 +119,18 @@ class Backup(replication_pb2_grpc.SequenceServicer):
     def check_heartbeats(self):
         current_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())
         if self.primary_last_heartbeat and time.time() - time.mktime(time.strptime(self.primary_last_heartbeat, '%Y-%m-%d %H:%M:%S')) > 10:
-            
             self.start_election()
+
+    def get_isPrimary(self):
+        return self.isPrimary
+
 
     
 
+def send_heartbeat(heartbeat_stub):
+    while True:
+        heartbeat_stub.Heartbeat(heartbeat_service_pb2.HeartbeatRequest(service_identifier='primary'))
+        time.sleep(5)  # Send heartbeat every 5 seconds
 
 def serve(port):
     outfile = 'backup_'+port+'.txt'
@@ -147,12 +157,30 @@ def serve(port):
     server.start()
     print("Backup server started on "+port+".")
 
+
+    backup_id = 'backup'+port
     # Start sending and checking heartbeats
-    while True:
-        backup_id = 'backup'+port
+    loop = True
+    while loop:
         heartbeat_stub.Heartbeat(heartbeat_service_pb2.HeartbeatRequest(service_identifier=backup_id))
-        backup_instance.check_heartbeats()
+        backup_instance.check_heartbeats() 
         time.sleep(5)  # Send heartbeat every 5 seconds
+        loop = not backup_instance.get_isPrimary()
+
+    this_channel = f'localhost:{port}'
+    heartbeat_stub.RemoveBackupStub(heartbeat_service_pb2.RemoveBackupStubRequest(backup_address=this_channel))
+    server.stop(None)
+    print("Backup server stopped on "+port+".")
+
+    # Election is won. Becoming Primary
+    server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+    primary_servicer = Primary(backup_stubs, heartbeat_stub)
+    replication_pb2_grpc.add_SequenceServicer_to_server(primary_servicer, server)
+    server.add_insecure_port('[::]:50051')
+    server.start()
+    print("Primary server started.")
+    
+    send_heartbeat(heartbeat_stub)
 
     server.wait_for_termination()
 

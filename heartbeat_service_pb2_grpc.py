@@ -25,6 +25,11 @@ class ViewServiceStub(object):
                 request_serializer=heartbeat__service__pb2.AddBackupStubRequest.SerializeToString,
                 response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
                 )
+        self.RemoveBackupStub = channel.unary_unary(
+                '/viewservice.ViewService/RemoveBackupStub',
+                request_serializer=heartbeat__service__pb2.RemoveBackupStubRequest.SerializeToString,
+                response_deserializer=google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+                )
 
 
 class ViewServiceServicer(object):
@@ -42,6 +47,12 @@ class ViewServiceServicer(object):
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def RemoveBackupStub(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ViewServiceServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -53,6 +64,11 @@ def add_ViewServiceServicer_to_server(servicer, server):
             'AddBackupStub': grpc.unary_unary_rpc_method_handler(
                     servicer.AddBackupStub,
                     request_deserializer=heartbeat__service__pb2.AddBackupStubRequest.FromString,
+                    response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
+            ),
+            'RemoveBackupStub': grpc.unary_unary_rpc_method_handler(
+                    servicer.RemoveBackupStub,
+                    request_deserializer=heartbeat__service__pb2.RemoveBackupStubRequest.FromString,
                     response_serializer=google_dot_protobuf_dot_empty__pb2.Empty.SerializeToString,
             ),
     }
@@ -95,6 +111,23 @@ class ViewService(object):
             metadata=None):
         return grpc.experimental.unary_unary(request, target, '/viewservice.ViewService/AddBackupStub',
             heartbeat__service__pb2.AddBackupStubRequest.SerializeToString,
+            google_dot_protobuf_dot_empty__pb2.Empty.FromString,
+            options, channel_credentials,
+            insecure, call_credentials, compression, wait_for_ready, timeout, metadata)
+
+    @staticmethod
+    def RemoveBackupStub(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(request, target, '/viewservice.ViewService/RemoveBackupStub',
+            heartbeat__service__pb2.RemoveBackupStubRequest.SerializeToString,
             google_dot_protobuf_dot_empty__pb2.Empty.FromString,
             options, channel_credentials,
             insecure, call_credentials, compression, wait_for_ready, timeout, metadata)

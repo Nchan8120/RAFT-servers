@@ -35,6 +35,18 @@ class HeartbeatService(heartbeat_service_pb2_grpc.ViewServiceServicer):
         self.backup_stubs.append(backup_stub)
         return Empty()
 
+    # Remove backup after transition to primary
+    def RemoveBackupStub(self, request, context):
+        channel = request.backup_address
+        try:
+            # Remove the backup stub associated with the provided channel from the list
+            backup_stub_index = [stub._channel._channel.default_target() for stub in self.backup_stubs].index(channel)
+            del self.backup_stubs[backup_stub_index]
+            print(f"Backup stub with channel {channel} removed.")
+        except ValueError:
+            print(f"Backup stub with channel {channel} not found.")
+        return Empty()
+
     # Method to forward heartbeat to all backup servers
     def forward_heartbeat_to_backups(self):
         for backup_stub in self.backup_stubs:
