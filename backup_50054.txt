@@ -1,0 +1,4 @@
+Key: 1, Value: red
+Key: 2, Value: blue
+Key: 3, Value: gold
+Key: 4, Value: silver
