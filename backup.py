@@ -89,11 +89,12 @@ class Backup(replication_pb2_grpc.SequenceServicer):
             # Step 3: Request votes from other backups
             for backup_stub in self.backup_stubs:
                 try:
+                    '''
                     print("current_term:", self.current_term)
                     print("port:", self.port)
                     print("last_log_index:", self.last_log_index)
                     print("last_log_term:", self.log[self.last_log_index]['term'])
-            
+                    '''
                     response = backup_stub.RequestVote(replication_pb2.RequestVoteRequest(
                         term=self.current_term,
                         candidate_id=int(self.port),  

@@ -19,12 +19,11 @@ class HeartbeatService(heartbeat_service_pb2_grpc.ViewServiceServicer):
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            # Initialize variables here
-            cls._instance.primary_last_heartbeat = None
+            cls._instance.primary_last_heartbeat = None 
             cls._instance.backup_last_heartbeat = None
             cls._instance.primary_down = True
             cls._instance.backup_down = True
-            cls._instance.backup_stubs = []
+            cls._instance.backup_stubs = {}
         return cls._instance
 
     # Method to add backup stub
@@ -32,24 +31,19 @@ class HeartbeatService(heartbeat_service_pb2_grpc.ViewServiceServicer):
         channel = request.backup_address
         backup_channel = grpc.insecure_channel(channel)
         backup_stub = replication_pb2_grpc.SequenceStub(backup_channel)
-        self.backup_stubs.append(backup_stub)
+        self.backup_stubs[channel] = backup_stub
         return Empty()
 
     # Remove backup after transition to primary
     def RemoveBackupStub(self, request, context):
         channel = request.backup_address
-        try:
-            # Remove the backup stub associated with the provided channel from the list
-            backup_stub_index = [stub._channel._channel.default_target() for stub in self.backup_stubs].index(channel)
-            del self.backup_stubs[backup_stub_index]
-            print(f"Backup stub with channel {channel} removed.")
-        except ValueError:
-            print(f"Backup stub with channel {channel} not found.")
+        if channel in self.backup_stubs:
+            del self.backup_stubs[channel]
         return Empty()
 
     # Method to forward heartbeat to all backup servers
     def forward_heartbeat_to_backups(self):
-        for backup_stub in self.backup_stubs:
+        for backup_stub in self.backup_stubs.values():
             backup_stub.Heartbeat(heartbeat_service_pb2.HeartbeatRequest(service_identifier='primary'))
 
     # tracks what server we are receiving heartbeats from and the time
