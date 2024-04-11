@@ -48,7 +48,7 @@ class ServerSequenceServicer(SequenceServicer):
 
         def writeToServer(self:ServerSequenceServicer, server:ServerNode):
             index = self.serverState.commitIndex
-            while index > 0:
+            while index >= 0:
                 try:
                     print('[!] send to %s, index = %d' %(server.id, index))
                     entries = self.serverState.log[index:]
@@ -117,9 +117,9 @@ class ServerSequenceServicer(SequenceServicer):
         ))
 
         # log doesnt have entry at index of prevLogIndex or its term doesnt match
-        if request.prevLogIndex > 0 and (request.prevLogIndex not in self.serverState.logs or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm):
-            context.set_code(grpc.StatusCode.DATA_LOSS)
-            return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
+        # if request.prevLogIndex > 0 and (request.prevLogIndex not in self.serverState.logs or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm):
+            # context.set_code(grpc.StatusCode.DATA_LOSS)
+            # return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
         
         # got stuff from a leader, so we cancel our election
         self.serverState.isElection = False
@@ -127,10 +127,10 @@ class ServerSequenceServicer(SequenceServicer):
         
         # new leader ID
         if self.serverState.leaderId != request.leaderId:
-            self.serverState.currentTerm = request.term
             self.serverState.setLeaderId(request.leaderId)
             self.downgradeToFollower()
             print('[!] NEW LEADER: ', self.serverState.leaderId)
+        self.serverState.currentTerm = request.term
 
         # empty entries, is a heartbeat from leader
         if len(request.entries) == 0:

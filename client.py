@@ -27,7 +27,7 @@ def write_to_primary(key, value):
                 response = stub.Write(replication_pb2.WriteRequest(key=key, value=value))
 
                 # were we instructed to use a different leader ??
-                if response.leaderId > 0:
+                if response.leaderId > 0 and response.ack != 'COMMITTED':
                     uris.insert(0, str(response.leaderId))
                     continue
 
