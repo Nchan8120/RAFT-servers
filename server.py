@@ -47,16 +47,16 @@ class ServerSequenceServicer(SequenceServicer):
         self.addEntry(self.serverState.currentTerm, entry)
 
         def writeToServer(self:ServerSequenceServicer, server:ServerNode):
-            index = 1
-            while index <= self.serverState.commitIndex:
+            index = self.serverState.commitIndex
+            while index > 0:
                 try:
                     print('[!] send to %s, index = %d' %(server.id, index))
-                    entries = self.serverState.log[-index:]
+                    entries = self.serverState.log[index:]
                     resp = server.stub.AppendEntries(AppendEntriesRequest(
                         term=self.serverState.currentTerm,
                         leaderId=int(self.serverState.id),
-                        prevLogIndex=self.serverState.commitIndex-index,
-                        prevLogTerm=self.serverState.log[-index]['term'],
+                        prevLogIndex=index-1,
+                        prevLogTerm=self.serverState.log[index-1]['term'],
                         leaderCommit=self.serverState.commitIndex,
                         entries = [e['value'] for e in entries],
                         entriesTerms = [int(e['term']) for e in entries]
@@ -117,7 +117,7 @@ class ServerSequenceServicer(SequenceServicer):
         ))
 
         # log doesnt have entry at index of prevLogIndex or its term doesnt match
-        if len(self.serverState.log) < request.prevLogIndex or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm:
+        if request.prevLogIndex > 0 and (request.prevLogIndex not in self.serverState.logs or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm):
             context.set_code(grpc.StatusCode.DATA_LOSS)
             return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
         
