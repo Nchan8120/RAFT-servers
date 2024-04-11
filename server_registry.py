@@ -4,6 +4,7 @@ from replication_pb2 import WriteResponse, WriteRequest, AppendEntriesRequest, A
 
 ports = ['50051', '50052', '50054', '50055', '50056']
 
+# represents a single node in this cluster
 class ServerNode:
     id = ''
     port = ''
@@ -53,6 +54,8 @@ class ServerNode:
     def setLeaderId(self, id):
         self.leaderId = id
 
+
+# container of all known servers
 class ServerRegistry:
     servers: dict[str, ServerNode] = {}
 

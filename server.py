@@ -1,9 +1,8 @@
 # CS4459 Assignment 2
-# David Tkachuk (dtkachu2@uwo.ca)
+# David Tkachuk (dtkachu2@uwo.ca) and Nathan Chan
 
 
 from concurrent import futures
-from pydoc import ispackage
 import grpc
 import sys, time, random
 from threading import Event, Thread
@@ -20,8 +19,7 @@ from server_registry import ServerNode, ServerRegistry
 
 fh = None
 
-HEALTH_THRESHOLD = 0.5
-
+HEALTH_THRESHOLD = 1.0
 
 # Server Service
 class ServerSequenceServicer(SequenceServicer):
@@ -52,6 +50,7 @@ class ServerSequenceServicer(SequenceServicer):
             index = 1
             while index <= self.serverState.commitIndex:
                 try:
+                    print('[!] send to %s, index = %d' %(server.id, index))
                     entries = self.serverState.log[-index:]
                     resp = server.stub.AppendEntries(AppendEntriesRequest(
                         term=self.serverState.currentTerm,
@@ -65,11 +64,14 @@ class ServerSequenceServicer(SequenceServicer):
 
                     if resp.success:
                         return True
+                    else:
+                        print('%s failed to write' % id)
+                        return False
                 except grpc.RpcError as ex:
+                    print('[!] FAILED TO WRITE TO %s : %s' % (id, ex.code()))
                     if ex.code() == grpc.StatusCode.DATA_LOSS:
                         index += 1
                     else:
-                        print('[!] FAILED TO WRITE TO %s :' % id)
                         return False
             return False
 
@@ -92,21 +94,28 @@ class ServerSequenceServicer(SequenceServicer):
         return WriteResponse(ack="FAIL: NOT COMITTED", leaderId=int(self.serverState.leaderId))
 
     def addEntry(self, term, value):
+        self.serverState.commitIndex += 1
         self.serverState.log.append({
             'term': term,
             'value': value
         })
         fh.write('[TERM=%s, INDEX=%s] :: %s\n' % (term, self.serverState.commitIndex, value))
         fh.flush()
-        self.serverState.commitIndex += 1
 
     def AppendEntries(self, request, context):
-        # print('append')
+        print('append')
         # this node has a higher term so fail to append
         if request.term < self.serverState.currentTerm:
             context.set_code(grpc.StatusCode.DATA_LOSS)
             return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
         
+        print('len=%d, prevIndex=%d, prevTerm=%d, prevValue=%d' % (
+            len(self.serverState.log),
+            request.prevLogIndex,
+            self.serverState.log[request.prevLogIndex]['term'],
+            request.prevLogTerm
+        ))
+
         # log doesnt have entry at index of prevLogIndex or its term doesnt match
         if len(self.serverState.log) < request.prevLogIndex or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm:
             context.set_code(grpc.StatusCode.DATA_LOSS)
@@ -198,6 +207,7 @@ class Server:
     stub: replication_pb2_grpc.SequenceStub  # stub to communicate with backup server
 
     heartBeatHandler = None
+    followHandler = None
 
     def __init__(self, port, id):
         # register the heart beat client
@@ -241,6 +251,10 @@ class Server:
         # kill heartbeat
         if self.heartBeatHandler is not None:
             self.heartBeatHandler()
+            self.heartBeatHandler = None
+        if self.followHandler is not None:
+            self.followHandler()
+            self.followHandler = None
         self.grpcServer.stop(0)
 
     # send a heartbeat to all followers
@@ -274,25 +288,34 @@ class Server:
         if self.serverState.isPrimary:
             print("[!] leader downgraded to follower")
 
-            # end existing heart beat timer task
-            if self.heartBeatHandler is not None:
-                self.heartBeatHandler()
-
+        # end existing heart beat timer task
+        if self.followHandler is not None:
+            self.followHandler()
+            self.followHandler = None
+        # end existing heart beat timer task
+        if self.heartBeatHandler is not None:
+            self.heartBeatHandler()
+            self.heartBeatHandler = None
+        
         self.serverState.isPrimary = False
 
         def schedule(self: Server, interval=1):
             stopped = Event()
             def loop():
                 while not stopped.wait(interval):
-                    # the healthchceck is stale
-                    if self.serverState.isStaleHealthCheck():
-                        self.startElection()
+                    try:
+                        # print('check')
+                        # the healthchceck is stale
+                        if self.serverState.isStaleHealthCheck():
+                            self.startElection()
+                    except Exception as ex:
+                        print('[ERROR] during election trigger', ex)
             Thread(target=loop).start()
             return stopped.set
         
-        timeout =HEALTH_THRESHOLD+(random.randint(150,300)/1000)
+        timeout =HEALTH_THRESHOLD+(random.randint(300,700)/1000)
         self.serverState.healthThreshold = timeout
-        self.heartBeatHandler = schedule(self, interval=timeout)
+        self.followHandler = schedule(self, interval=timeout)
 
     # set the local server as the leader if it wasnt before
     def setLeader(self):
@@ -300,8 +323,13 @@ class Server:
             return
         
         # end existing heart beat timer task
+        if self.followHandler is not None:
+            self.followHandler()
+            self.followHandler = None
+        # end existing heart beat timer task
         if self.heartBeatHandler is not None:
             self.heartBeatHandler()
+            self.heartBeatHandler = None
 
         print('[!] I was elected by the people')
         self.serverState.isPrimary = True
