@@ -1,4 +1,4 @@
-import grpc
+import grpc, time
 import replication_pb2_grpc
 from replication_pb2 import WriteResponse, WriteRequest, AppendEntriesRequest, AppendEntriesResponse, RequestVoteResponse
 
@@ -26,15 +26,27 @@ class ServerNode:
     # index of highest log entry applied
     lastApplied = 0
 
+    # node called election
+    isElection = False
+
+    healthThreshold = 1000
+    lastHealthCheck = 0
+
     def __init__(self, id, port):
         self.id = id
         self.log = [{'term':0,'value':None}]
         self.port = port
+        self.lastHealthCheck = time.time() # prevent new nodes forcing an election
     
     def connect(self):
         self.channel = grpc.insecure_channel(self.port)
         self.stub = replication_pb2_grpc.SequenceStub(self.channel)
 
+    def setHealthCheck(self):
+        self.lastHealthCheck = time.time()
+    
+    def isStaleHealthCheck(self):
+        return time.time() - self.lastHealthCheck >= self.healthThreshold
 
 class ServerRegistry:
     servers: dict[str, ServerNode] = {}

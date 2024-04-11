@@ -8,7 +8,6 @@ import grpc
 import sys, time, random
 from threading import Event, Thread
 
-from soupsieve import iselect
 
 
 import replication_pb2_grpc
@@ -21,6 +20,7 @@ from server_registry import ServerNode, ServerRegistry
 
 fh = None
 
+HEALTH_THRESHOLD = 0.5
 
 
 # Server Service
@@ -29,8 +29,11 @@ class ServerSequenceServicer(SequenceServicer):
 
     stub: replication_pb2_grpc.SequenceStub
 
-    def __init__(self, serverState): #, backupStub: replication_pb2_grpc.SequenceStub):
+    leaderId = None
+
+    def __init__(self, serverState, downgradeToFollower): #, backupStub: replication_pb2_grpc.SequenceStub):
         self.database = {}
+        self.downgradeToFollower = downgradeToFollower
         self.serverState = serverState
         # self.stub = backupStub
 
@@ -68,6 +71,7 @@ class ServerSequenceServicer(SequenceServicer):
         self.serverState.commitIndex += 1
 
     def AppendEntries(self, request, context):
+        print('append')
         # this node has a higher term so fail to append
         if request.term < self.serverState.currentTerm:
             return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
@@ -76,6 +80,16 @@ class ServerSequenceServicer(SequenceServicer):
         if len(self.serverState.log) < request.prevLogIndex or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm:
             return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
         
+        # got stuff from a leader, so we cancel our election
+        self.serverState.isElection = False
+        self.serverState.setHealthCheck()
+        
+        if self.leaderId != request.leaderId:
+            self.serverState.currentTerm = request.term
+            self.leaderId = request.leaderId
+            self.downgradeToFollower()
+            print('[!] NEW LEADER: ', self.leaderId)
+
         # empty entries, is a heartbeat from leader
         if len(request.entries) == 0:
             print("GOT HEARTBEAT")
@@ -93,15 +107,16 @@ class ServerSequenceServicer(SequenceServicer):
     def RequestVote(self, request, context):
         # this node has a higher term
         if request.term < self.serverState.currentTerm:
-            return RequestVoteResponse(term = self.serverState.currentTerm, success = False)
+            return RequestVoteResponse(term = self.serverState.currentTerm, vote_granted = False)
         
         # didnt vote before, and candidate's log is at least up to date as ours
         if request.last_log_index >= self.serverState.commitIndex and request.last_log_term >= self.serverState.currentTerm:
             self.serverState.votedFor = request.candidate_id
-            return RequestVoteResponse(term = self.serverState.currentTerm, success = True)
+            print('[!] VOTING FOR %s' % self.serverState.votedFor)
+            return RequestVoteResponse(term = self.serverState.currentTerm, vote_granted = True)
         
         # all else, no vote
-        return RequestVoteResponse(term = self.serverState.currentTerm, success = False)
+        return RequestVoteResponse(term = self.serverState.currentTerm, vote_granted = False)
 
 
 class Server:
@@ -117,7 +132,6 @@ class Server:
     stub: replication_pb2_grpc.SequenceStub  # stub to communicate with backup server
 
     heartBeatHandler = None
-    isElection = False
 
     def __init__(self, port, id):
         # register the heart beat client
@@ -137,7 +151,7 @@ class Server:
             futures.ThreadPoolExecutor(max_workers=10)
         )
         replication_pb2_grpc.add_SequenceServicer_to_server(
-            ServerSequenceServicer(self.serverState),
+            ServerSequenceServicer(self.serverState, self.setFollower),
             server=self.grpcServer
         )
         self.grpcServer.add_insecure_port(port)
@@ -168,6 +182,10 @@ class Server:
             return
         
         for id in self.registry.servers:
+            # dont ping self
+            if id == self.serverState.id:
+                continue
+
             server = self.registry.servers[id]
             try:
                 resp = server.stub.AppendEntries(AppendEntriesRequest(
@@ -178,24 +196,45 @@ class Server:
                     leaderCommit=self.serverState.commitIndex,
                     entries = []
                 ))
+
+                # update this node's last seen time
+                server.setHealthCheck()
             except grpc.RpcError as ex:
-                print('[!] FAILED TO SEND HEARTBEAT TO %s :' % id, ex)
+                print('[!] FAILED TO SEND HEARTBEAT TO %s :' % id)
 
     def setFollower(self):
         if self.serverState.isPrimary:
             print("[!] leader downgraded to follower")
 
-            # end heart beat
+            # end existing heart beat timer task
             if self.heartBeatHandler is not None:
                 self.heartBeatHandler()
 
         self.serverState.isPrimary = False
+
+        def schedule(self: Server, interval=1):
+            stopped = Event()
+            def loop():
+                while not stopped.wait(interval):
+                    # the healthchceck is stale
+                    if self.serverState.isStaleHealthCheck():
+                        self.startElection()
+            Thread(target=loop).start()
+            return stopped.set
+        
+        timeout =HEALTH_THRESHOLD+(random.randint(150,300)/1000)
+        self.serverState.healthThreshold = timeout
+        self.heartBeatHandler = schedule(self, interval=timeout)
 
     # set the local server as the leader if it wasnt before
     def setLeader(self):
         if self.serverState.isPrimary:
             return
         
+        # end existing heart beat timer task
+        if self.heartBeatHandler is not None:
+            self.heartBeatHandler()
+
         print('[!] I was elected by the people')
         self.serverState.isPrimary = True
 
@@ -209,18 +248,22 @@ class Server:
 
         # send instantly    
         self.sendHeartbeats()
-        self.heartBeatHandler = schedule(self)
+        self.heartBeatHandler = schedule(self, interval=HEALTH_THRESHOLD)
 
     def startElection(self):
         # ignore primary or current elections
-        if self.isElection or self.serverState.isPrimary:
+        if self.serverState.isElection or self.serverState.isPrimary:
             return
         
         # voted for self
+        self.serverState.isElection = True
         self.serverState.currentTerm += 1
-        self.serverState.votedFor = int(self.port)
+        self.serverState.votedFor = int(self.id)
         votes = 1
 
+        minVotes = 1
+
+        print('[!] Starting a new election')
 
         for id in self.registry.servers:
             try:
@@ -232,12 +275,20 @@ class Server:
                     last_log_term = self.serverState.log[self.serverState.commitIndex]['term']
                 ))
 
+                minVotes += 1
                 if resp.vote_granted:
                     votes += 1
             except grpc.RpcError as ex:
                 print('Failed to get election from %s'%id, ex)
 
-        if votes >= len(self.registry.servers.keys())/2:
+        print('[!] Got %d votes out of %d' % (votes, minVotes))
+
+        if not self.serverState.isElection:
+            print('[!] Election was cancelled')
+            return
+
+        if votes >= minVotes/2:
+            print('[!] Elected!')
             self.setLeader()
 
 
