@@ -26,15 +26,15 @@ HEALTH_THRESHOLD = 0.5
 # Server Service
 class ServerSequenceServicer(SequenceServicer):
     serverState: ServerNode
+    registry: ServerRegistry
 
     stub: replication_pb2_grpc.SequenceStub
 
-    leaderId = None
-
-    def __init__(self, serverState, downgradeToFollower): #, backupStub: replication_pb2_grpc.SequenceStub):
+    def __init__(self, serverState, downgradeToFollower, registry: ServerRegistry): #, backupStub: replication_pb2_grpc.SequenceStub):
         self.database = {}
         self.downgradeToFollower = downgradeToFollower
         self.serverState = serverState
+        self.registry = registry
         # self.stub = backupStub
 
     # Handle write RPC messages
@@ -42,66 +42,132 @@ class ServerSequenceServicer(SequenceServicer):
         # check for leader
         if self.serverState.isPrimary is False:
             context.set_code(grpc.StatusCode.UNAVAILABLE)
-            return WriteResponse(ack="FAIL: NOT LEADER")
+            return WriteResponse(ack="FAIL: NOT LEADER", leaderId=int(self.serverState.leaderId))
 
-        key = request.key
-        value = request.value
-        print('Got: key=%s, value=%s' % (key,value))
-        try:
-            # try to send this to the bakcup
-            response = self.stub.Write(WriteRequest(key=key, value=value))
-            if response.ack == key:  #verify the ack respond
-                # write to our dictionary and outputs
-                self.database[key] = value
-                #fh.write("%s = %s\n" % (key, value))
-                #fh.flush()
-                return WriteResponse(ack=key)
-        except Exception as ex:
-            print('ERROR: ', ex)
+        entry = '%s=%s' % (request.key, request.value)
+        print('[!] WRITE %s'%entry)
+        self.addEntry(self.serverState.currentTerm, entry)
+
+        def writeToServer(self:ServerSequenceServicer, server:ServerNode):
+            index = 1
+            while index <= self.serverState.commitIndex:
+                try:
+                    entries = self.serverState.log[-index:]
+                    resp = server.stub.AppendEntries(AppendEntriesRequest(
+                        term=self.serverState.currentTerm,
+                        leaderId=int(self.serverState.id),
+                        prevLogIndex=self.serverState.commitIndex-index,
+                        prevLogTerm=self.serverState.log[-index]['term'],
+                        leaderCommit=self.serverState.commitIndex,
+                        entries = [e['value'] for e in entries],
+                        entriesTerms = [int(e['term']) for e in entries]
+                    ))
+
+                    if resp.success:
+                        return True
+                except grpc.RpcError as ex:
+                    if ex.code() == grpc.StatusCode.DATA_LOSS:
+                        index += 1
+                    else:
+                        print('[!] FAILED TO WRITE TO %s :' % id)
+                        return False
+            return False
+
+        committed = 1
+
+        for id in self.registry.servers:
+            # dont write to self self
+            if id == self.serverState.id:
+                continue
+
+            server = self.registry.servers[id]
+            if writeToServer(self, server):
+                committed += 1
+
+        if committed >= len(self.registry.servers.keys())/2:
+            return WriteResponse(ack="COMMITTED", leaderId=int(self.serverState.leaderId))
 
         # all else something went wrong
         context.set_code(grpc.StatusCode.UNAVAILABLE)
-        return WriteResponse(ack="FAIL: NOT LEADER")
+        return WriteResponse(ack="FAIL: NOT COMITTED", leaderId=int(self.serverState.leaderId))
 
     def addEntry(self, term, value):
         self.serverState.log.append({
             'term': term,
             'value': value
         })
+        fh.write('[TERM=%s, INDEX=%s] :: %s\n' % (term, self.serverState.commitIndex, value))
+        fh.flush()
         self.serverState.commitIndex += 1
 
     def AppendEntries(self, request, context):
-        print('append')
+        # print('append')
         # this node has a higher term so fail to append
         if request.term < self.serverState.currentTerm:
+            context.set_code(grpc.StatusCode.DATA_LOSS)
             return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
         
         # log doesnt have entry at index of prevLogIndex or its term doesnt match
         if len(self.serverState.log) < request.prevLogIndex or self.serverState.log[request.prevLogIndex]['term'] != request.prevLogTerm:
+            context.set_code(grpc.StatusCode.DATA_LOSS)
             return AppendEntriesResponse(success=False, term=self.serverState.currentTerm)
         
         # got stuff from a leader, so we cancel our election
         self.serverState.isElection = False
         self.serverState.setHealthCheck()
         
-        if self.leaderId != request.leaderId:
+        # new leader ID
+        if self.serverState.leaderId != request.leaderId:
             self.serverState.currentTerm = request.term
-            self.leaderId = request.leaderId
+            self.serverState.setLeaderId(request.leaderId)
             self.downgradeToFollower()
-            print('[!] NEW LEADER: ', self.leaderId)
+            print('[!] NEW LEADER: ', self.serverState.leaderId)
 
         # empty entries, is a heartbeat from leader
         if len(request.entries) == 0:
-            print("GOT HEARTBEAT")
+            # print("GOT HEARTBEAT FROM ", request.leaderId)
             return AppendEntriesResponse(success=True, term=self.serverState.currentTerm)
         
         else:
+            i = self.serverState.commitIndex
+
             # append entry
-            for entry in request.entries:
-                self.addEntry(request.term, entry)
+            # for entry in request.entries:
+                # self.addEntry(request.term, entry)
+            
+            remainingEntries = len(request.entries)
+            j = request.prevLogIndex
+            i = 0
+
+            while remainingEntries > 0:
+                entry = request.entries[i]
+
+                # append
+                if j not in self.serverState.log:
+                    self.addEntry(request.term, entry)
+                
+                else:
+                    term = request.entriesTerms[i]
+                    value = request.entries[i]
+
+                    if self.serverState.log[j]['term'] != term or self.serverState.log[j]['value'] != value:
+                        self.serverState.log[j] = {
+                            'term': term,
+                            'value': value
+                        }
+                        fh.write('[OVERWRITE TERM=%s, INDEX=%s] :: %s\n' % (term, j, value))
+                        fh.flush()
+
+                i += 1
+                j += 1
+                remainingEntries -= 1
+            
+
         
         if request.leaderCommit > self.serverState.commitIndex:
             self.serverState.commitIndex = min(self.serverState.commitIndex, request.leaderCommit)
+
+        return AppendEntriesResponse(success=True, term=self.serverState.currentTerm)
 
 
     def RequestVote(self, request, context):
@@ -140,6 +206,9 @@ class Server:
         self.port = port
         self.serverState = ServerNode(id, port)
 
+        # setup registry
+        self.registry = ServerRegistry(id)
+
         # # setup a gRPC connection to the backup server
         # with grpc.insecure_channel(backupServer) as c:
         #     print('[!] Connected to *backup* gRPC server on %s' % backupServer)
@@ -151,13 +220,11 @@ class Server:
             futures.ThreadPoolExecutor(max_workers=10)
         )
         replication_pb2_grpc.add_SequenceServicer_to_server(
-            ServerSequenceServicer(self.serverState, self.setFollower),
+            ServerSequenceServicer(self.serverState, self.setFollower, self.registry),
             server=self.grpcServer
         )
         self.grpcServer.add_insecure_port(port)
 
-        # setup registry
-        self.registry = ServerRegistry(id)
         self.setFollower()
 
         # run primary server
@@ -200,7 +267,8 @@ class Server:
                 # update this node's last seen time
                 server.setHealthCheck()
             except grpc.RpcError as ex:
-                print('[!] FAILED TO SEND HEARTBEAT TO %s :' % id)
+                # print('[!] FAILED TO SEND HEARTBEAT TO %s :' % id)
+                pass
 
     def setFollower(self):
         if self.serverState.isPrimary:
@@ -237,6 +305,7 @@ class Server:
 
         print('[!] I was elected by the people')
         self.serverState.isPrimary = True
+        self.serverState.setLeaderId(self.serverState.id)
 
         def schedule(self, interval=1):
             stopped = Event()
@@ -299,6 +368,7 @@ if __name__ == '__main__':
         exit(1)
     
     port = sys.argv[1]
+    with open('%s.log' % port, 'w'): pass
     fh = open('%s.log' % port, 'a')
 
     print('[!] Starting server, port and ID = %s' % port)

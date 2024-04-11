@@ -16,6 +16,7 @@ message AppendEntriesRequest {
   int32 prevLogTerm = 4;
   int32 leaderCommit = 5;
   repeated string entries = 6;
+  repeated int32 entriesTerms = 7;
 }
 
 message AppendEntriesResponse {
@@ -30,6 +31,7 @@ message WriteRequest {
 
 message WriteResponse {
   string ack = 1;
+  int32 leaderId = 2;
 }
 
 message RequestVoteRequest {

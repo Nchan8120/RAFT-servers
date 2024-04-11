@@ -32,6 +32,8 @@ class ServerNode:
     healthThreshold = 1000
     lastHealthCheck = 0
 
+    leaderId = 0
+
     def __init__(self, id, port):
         self.id = id
         self.log = [{'term':0,'value':None}]
@@ -47,6 +49,9 @@ class ServerNode:
     
     def isStaleHealthCheck(self):
         return time.time() - self.lastHealthCheck >= self.healthThreshold
+
+    def setLeaderId(self, id):
+        self.leaderId = id
 
 class ServerRegistry:
     servers: dict[str, ServerNode] = {}
