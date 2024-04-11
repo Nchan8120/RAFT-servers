@@ -1,4 +1,6 @@
 import grpc
+import replication_pb2_grpc
+from replication_pb2 import WriteResponse, WriteRequest, AppendEntriesRequest, AppendEntriesResponse, RequestVoteResponse
 
 ports = ['50051', '50052', '50054', '50055', '50056']
 
@@ -7,6 +9,7 @@ class ServerNode:
     port = ''
     isPrimary = False
     channel: grpc.Channel
+    stub: replication_pb2_grpc.SequenceStub
 
     # latest term this server seen
     currentTerm = 0
@@ -15,7 +18,7 @@ class ServerNode:
     votedFor =0
 
     # log entries
-    log = [None]
+    log = []
 
     # highest log entry known to be commited
     commitIndex = 0
@@ -25,13 +28,16 @@ class ServerNode:
 
     def __init__(self, id, port):
         self.id = id
+        self.log = [{'term':0,'value':None}]
         self.port = port
     
     def connect(self):
         self.channel = grpc.insecure_channel(self.port)
+        self.stub = replication_pb2_grpc.SequenceStub(self.channel)
+
 
 class ServerRegistry:
-    servers = {}
+    servers: dict[str, ServerNode] = {}
 
     def __init__(self, localId):
         for port in ports:
